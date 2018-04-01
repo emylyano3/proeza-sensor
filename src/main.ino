@@ -25,19 +25,17 @@ const char STATE_OFF      = '0';
 const char STATE_ON       = '1';
 
 #ifndef ESP01
-const String MODULE_TYPE  = "ligthStation";
-const String CHANNEL_TYPE = "light";
+const String MODULE_TYPE  = "senseStation";
+const String CHANNEL_TYPE = "sensor";
 #else
-const String CHANNEL_TYPE = "light";
+const String CHANNEL_TYPE = "sensor";
 const String MODULE_TYPE  = CHANNEL_TYPE;
 #endif
 
 struct Channel {
   WiFiManagerParameter *param;
-  uint8_t switchPin;
-  int switchState;
-  uint8_t relayPin;
-  char relayState;
+  uint8_t sensorPin;
+  int sensorState;
 };
 
 WiFiClient espClient;
@@ -47,32 +45,38 @@ ESP8266HTTPUpdateServer httpUpdater;
 
 WiFiManagerParameter mqttServer("mqttServer", "MQTT Server", "192.168.0.105", 16);
 WiFiManagerParameter mqttPort("mqttPort", "MQTT Port", "1883", 6);
-WiFiManagerParameter moduleLocation("moduleLocation", "Module location", "room", PARAM_LENGTH);
-WiFiManagerParameter moduleName("moduleName", "Module name", "ceiling", PARAM_LENGTH);
-#ifndef ESP01
+WiFiManagerParameter moduleLocation("moduleLocation", "Module location", "cabin", PARAM_LENGTH);
+WiFiManagerParameter moduleName("moduleName", "Module name", "gas", PARAM_LENGTH);
+#ifdef ESP01
 WiFiManagerParameter ch_A_name("ch_A_name", "Channel A name", "ch_A", PARAM_LENGTH);
 WiFiManagerParameter ch_B_name("ch_B_name", "Channel B name", "ch_B", PARAM_LENGTH);
 WiFiManagerParameter ch_C_name("ch_C_name", "Channel C name", "ch_C", PARAM_LENGTH);
-#endif 
+#else
+WiFiManagerParameter ch_A_name("ch_A_name", "Channel A name", "ch_A", PARAM_LENGTH);
+WiFiManagerParameter ch_B_name("ch_B_name", "Channel B name", "ch_B", PARAM_LENGTH);
+WiFiManagerParameter ch_C_name("ch_C_name", "Channel C name", "ch_C", PARAM_LENGTH);
+#endif
 
 #ifdef ESP01
 Channel channels[] = {
-  {&moduleName, 3, LOW, 2, STATE_OFF}
+  {&ch_A_name, 2, LOW},
+  {&ch_B_name, 3, LOW},
+  {&ch_C_name, 0, LOW}
 };
-const uint8_t CHANNELS_COUNT  = 1;
+const uint8_t CHANNELS_COUNT  = 3;
 const uint8_t TX_PIN          = 1;
 #elif NODEMCUV2
 Channel channels[] = {
-  {&ch_A_name, D7, LOW, D1, STATE_OFF},
-  {&ch_B_name, D6, LOW, D2, STATE_OFF},
-  {&ch_C_name, D0, LOW, D4, STATE_OFF}
+  {&ch_A_name, D7, LOW},
+  {&ch_B_name, D6, LOW},
+  {&ch_C_name, D0, LOW}
 };
 const uint8_t CHANNELS_COUNT = 3;
 #else
 Channel channels[] = {
-  {&ch_A_name, 13, LOW, 5, STATE_OFF},
-  {&ch_B_name, 12, LOW, 4, STATE_OFF},
-  {&ch_C_name, 16, LOW, 2, STATE_OFF}
+  {&ch_A_name, 13, LOW},
+  {&ch_B_name, 12, LOW},
+  {&ch_C_name, 16, LOW}
 };
 const uint8_t CHANNELS_COUNT = 3;
 #endif
@@ -109,9 +113,7 @@ void setup() {
     
   // pins settings
   for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
-    pinMode(channels[i].relayPin, OUTPUT);
-    pinMode(channels[i].switchPin, INPUT);
-    digitalWrite(channels[i].switchPin, HIGH);
+    pinMode(channels[i].sensorPin, INPUT);
   }
   
   // WiFi Manager Config  
@@ -129,11 +131,9 @@ void setup() {
   wifiManager.addParameter(&mqttPort);
   wifiManager.addParameter(&moduleLocation);
   wifiManager.addParameter(&moduleName);
-#ifndef ESP01
   for (uint8_t i = 0; i < CHANNELS_COUNT; ++i) {
     wifiManager.addParameter(channels[i].param);
   }
-#endif
   if (!wifiManager.autoConnect(("ESP_" + String(ESP.getChipId())).c_str(), "12345678")) {
     log(F("Failed to connect and hit timeout"));
     delay(3000);
@@ -220,7 +220,11 @@ bool loadConfig() {
               } else if (key.equals(moduleName.getID())) {
                 moduleName.update(val.c_str());
               } else {
-                log("ERROR. Unknown key");
+                for (uint8_t i = 0; i < CHANNELS_COUNT; ++i) {
+                  if (key.equals(channels[i].param->getID())) {
+                    channels[i].param->update(val.c_str());
+                  }
+                }
               }
             } else {
               log("Config bad format", line);
@@ -269,6 +273,10 @@ void saveConfigCallback () {
     configFile.println(line);
     line = String(moduleLocation.getID()) + "=" + String(moduleLocation.getValue());
     configFile.println(line);
+    for (uint8_t i = 0; i < CHANNELS_COUNT; ++i) {
+      line = String(channels[i].param->getID()) + "=" + String(channels[i].param->getValue());
+      configFile.println(line);
+    }
   #endif
   } else {
     log(F("Failed to open config file for writing"));
@@ -278,14 +286,6 @@ void saveConfigCallback () {
 
 void receiveMqttMessage(char* topic, unsigned char* payload, unsigned int length) {
   log(F("Received mqtt message topic"), topic);
-  for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
-    if (isChannelEnabled(&channels[i])) {
-      if (getChannelTopic(&channels[i], "cmd").equals(topic)) {
-        processCommand(&channels[i], payload, length);
-        return;
-      }
-    }
-  }
   if (String(topic).equals(getStationTopic("hrst"))) {
     hardReset();
   } else {
@@ -303,28 +303,7 @@ void hardReset () {
 }
 
 void publishState (Channel *c) {
-  mqttClient.publish(getChannelTopic(c, "state").c_str(), new char[2]{c->relayState, '\0'});
-}
-
-void processCommand (Channel *c, unsigned char* payload, unsigned int length) {
-  if (length != 1 || !payload) {
-    log(F("Invalid payload. Ignoring."));
-    return;
-  }
-  if (!isDigit(payload[0])) {
-      log(F("Invalid payload format. Ignoring."));
-      return;
-  }
-  switch (payload[0]) {
-    case '0':
-    case '1':
-      setRelayState(c, payload[0]);
-    break;
-    default:
-      log(F("Invalid state"), payload[0]);
-    return;
-  } 
-  publishState(c);
+  mqttClient.publish(getChannelTopic(c, "state").c_str(), new char[2]{c->sensorState, '\0'});
 }
 
 void processPhysicalInput() {
@@ -336,42 +315,17 @@ void processPhysicalInput() {
 }
 
 void processChannelInput(Channel *c) {
-  int read = digitalRead(c->switchPin);
-  log("Read from sensor", read);
-  if (read != c->switchState) {
+  int read = digitalRead(c->sensorPin);
+  log("Read from sensor [" + String(c->param->getValue()) + "]", read);
+  if (read != c->sensorState) {
     log(F("Phisical switch state has changed. Updating channel"), c->param->getValue());
-    c->switchState = read;
-    flipRelayState(c);
+    c->sensorState = read;
     publishState(c);
   }
 }
 
 bool isChannelEnabled (Channel *c) {
   return c->param->getValueLength() > 0;
-}
-
-void setRelayState (Channel *c, char newState) {
-  if (c->relayState != newState) {
-    flipRelayState(c);
-  } else {
-    log("Same state to channel, no update done", c->param->getValue());
-  }
-}
-
-void flipRelayState (Channel *c) {
-  c->relayState = c->relayState == STATE_OFF ? STATE_ON : STATE_OFF;
-  switch (c->relayState) {
-    case STATE_OFF:
-      digitalWrite(c->relayPin, LOW);
-      break;
-    case STATE_ON:
-      digitalWrite(c->relayPin, HIGH);
-      break;
-    default:
-      break;
-  }
-  log(F("Channel updated"), c->param->getValue());
-  log(F("State changed to"), c->relayState);
 }
 
 char* getStationName () {
@@ -391,11 +345,6 @@ void connectBroker() {
     if (mqttClient.connect(getStationName())) {
       log(F("MQTT broker connected"));
       subscribeTopic(getStationTopic("#").c_str());
-      // for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
-      //   if (isChannelEnabled(&channels[i])) {
-      //     subscribeTopic(getChannelTopic(&channels[i], "cmd").c_str());
-      //   }
-      // }
     }
   } else {
     log(F("Failed. RC:"), mqttClient.state());
