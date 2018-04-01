@@ -168,7 +168,7 @@ void loop() {
   if (!mqttClient.connected()) {
     connectBroker();
   }
-  delay(100);
+  delay(READ_INTERVAL);
   mqttClient.loop();
 }
 
