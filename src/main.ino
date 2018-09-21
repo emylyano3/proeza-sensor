@@ -1,20 +1,13 @@
-#include <FS.h>                   //this needs to be first, or it all crashes and burns...
-
-#include <ESP8266WiFi.h>          //https://github.com/esp8266/Arduino
-
+#include <FS.h> //this needs to be first, or it all crashes and burns...
+#include <ESP8266WiFi.h>     
 #include <ESP8266WebServer.h>
-
-// Alternativa a WifiManager
-// https://github.com/chriscook8/esp-arduino-apboot/blob/master/ESP-wifiboot.ino
-#include <WiFiManager.h>          
-
 #include <WiFiClient.h>
 #include <ESP8266HTTPUpdateServer.h>
-
 #include <PubSubClient.h>
+#include <ESPConfig.h>
 
 #ifndef ESP01
-#include <ArduinoJson.h>          //https://github.com/bblanchon/ArduinoJson
+#include <ArduinoJson.h>
 #include <ESP8266mDNS.h>
 #endif
 
@@ -30,8 +23,11 @@ const String MODULE_TYPE = "sensor";
 const String MODULE_TYPE = "sensor";
 #endif
 
+
+char          _stationName[PARAM_LENGTH * 3 + 4];
+
 struct Channel {
-  WiFiManagerParameter *param;
+  ESPConfigParam *param;
   uint8_t sensorPin;
   int sensorState;
 };
@@ -41,18 +37,18 @@ PubSubClient mqttClient(espClient);
 ESP8266WebServer httpServer(80);
 ESP8266HTTPUpdateServer httpUpdater;
 
-WiFiManagerParameter mqttServer("mqttServer", "MQTT Server", "192.168.0.105", 16);
-WiFiManagerParameter mqttPort("mqttPort", "MQTT Port", "1883", 6);
-WiFiManagerParameter moduleLocation("moduleLocation", "Module location", "cabin", PARAM_LENGTH);
-WiFiManagerParameter moduleName("moduleName", "Module name", "gas", PARAM_LENGTH);
+ESPConfigParam mqttServer(Text, "mqttServer", "MQTT Server", "192.168.0.105", PARAM_LENGTH, "required");
+ESPConfigParam mqttPort(Text, "mqttPort", "MQTT Port", "1883", 6, "required");
+ESPConfigParam moduleLocation(Text, "moduleLocation", "Module location", "cabin", PARAM_LENGTH, "required");
+ESPConfigParam moduleName(Text, "moduleName", "Module name", "gas", PARAM_LENGTH, "required");
 #ifdef ESP01
-WiFiManagerParameter ch_A_name("ch_A_name", "Channel A name", "ch_A", PARAM_LENGTH);
-WiFiManagerParameter ch_B_name("ch_B_name", "Channel B name", "ch_B", PARAM_LENGTH);
-WiFiManagerParameter ch_C_name("ch_C_name", "Channel C name", "ch_C", PARAM_LENGTH);
+ESPConfigParam ch_A_name(Text, "ch_A_name", "Channel A name", "ch_A", PARAM_LENGTH, "required");
+ESPConfigParam ch_B_name(Text, "ch_B_name", "Channel B name", "ch_B", PARAM_LENGTH, "required");
+ESPConfigParam ch_C_name(Text, "ch_C_name", "Channel C name", "ch_C", PARAM_LENGTH, "required");
 #else
-WiFiManagerParameter ch_A_name("ch_A_name", "Channel A name", "ch_A", PARAM_LENGTH);
-WiFiManagerParameter ch_B_name("ch_B_name", "Channel B name", "ch_B", PARAM_LENGTH);
-WiFiManagerParameter ch_C_name("ch_C_name", "Channel C name", "ch_C", PARAM_LENGTH);
+ESPConfigParam ch_A_name(Text, "ch_A_name", "Channel A name", "ch_A", PARAM_LENGTH, "required");
+ESPConfigParam ch_B_name(Text, "ch_B_name", "Channel B name", "ch_B", PARAM_LENGTH, "required");
+ESPConfigParam ch_C_name(Text, "ch_C_name", "Channel C name", "ch_C", PARAM_LENGTH, "required");
 #endif
 
 #ifdef ESP01
@@ -63,23 +59,26 @@ Channel channels[] = {
 };
 const uint8_t CHANNELS_COUNT  = 3;
 const uint8_t TX_PIN          = 1;
+const uint8_t LED_PIN         = INVALID_PIN_NO;
 #elif NODEMCUV2
 Channel channels[] = {
   {&ch_A_name, D7, LOW},
   {&ch_B_name, D6, LOW},
   {&ch_C_name, D0, LOW}
 };
-const uint8_t CHANNELS_COUNT = 3;
+const uint8_t LED_PIN         = D1;
+const uint8_t CHANNELS_COUNT  = 3;
 #else
 Channel channels[] = {
   {&ch_A_name, 13, LOW},
   {&ch_B_name, 12, LOW},
   {&ch_C_name, 16, LOW}
 };
-const uint8_t CHANNELS_COUNT = 3;
+const uint8_t LED_PIN         = 5;
+const uint8_t CHANNELS_COUNT  = 3;
 #endif
 
-long nextBrokerConnAtte = 0;
+unsigned long nextBrokerConnAtte = 0;
 
 template <class T> void log (T text) {
   if (LOGGING) {
@@ -107,38 +106,26 @@ void setup() {
   delay(500);
   Serial.println();
   log(F("Starting module"));
-  bool existConfig = loadConfig();
-    
-  // pins settings
   for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
     pinMode(channels[i].sensorPin, INPUT);
   }
-  
-  // WiFi Manager Config  
-  WiFiManager wifiManager;
-  wifiManager.setSaveConfigCallback(saveConfigCallback);
-  wifiManager.setStationNameCallback(getStationName);
-  wifiManager.setMinimumSignalQuality(WIFI_MIN_SIGNAL);
-  if (existConfig) {
-    wifiManager.setConnectTimeout(WIFI_CONN_TIMEOUT);
-  } else {
-    // If no previous config, no reason to try to connect to saved network. Wifi.diconnect() erases saved credentials
-    WiFi.disconnect();
-  }
-  wifiManager.addParameter(&mqttServer);
-  wifiManager.addParameter(&mqttPort);
-  wifiManager.addParameter(&moduleLocation);
-  wifiManager.addParameter(&moduleName);
+  ESPConfig moduleConfig;
+  moduleConfig.setSaveConfigCallback(saveConfigCallback);
+  moduleConfig.setStationNameCallback(getStationName);
+  moduleConfig.setMinimumSignalQuality(WIFI_MIN_SIGNAL);
+  moduleConfig.setConnectionTimeout(WIFI_CONN_TIMEOUT);
+  moduleConfig.addParameter(&mqttServer);
+  moduleConfig.addParameter(&mqttPort);
+  moduleConfig.addParameter(&moduleLocation);
+  moduleConfig.addParameter(&moduleName);
+  moduleConfig.setPortalSSID("ESP-Irrigation");
+  moduleConfig.setFeedbackPin(LED_PIN);
+  moduleConfig.setAPStaticIP(IPAddress(10,10,10,10),IPAddress(IPAddress(10,10,10,10)),IPAddress(IPAddress(255,255,255,0)));
   for (uint8_t i = 0; i < CHANNELS_COUNT; ++i) {
-    wifiManager.addParameter(channels[i].param);
+    moduleConfig.addParameter(channels[i].param);
   }
-  if (!wifiManager.autoConnect(("ESP_" + String(ESP.getChipId())).c_str(), "12345678")) {
-    log(F("Failed to connect and hit timeout"));
-    delay(3000);
-    //reset and try again, or maybe put it to deep sleep
-    ESP.reset();
-    delay(5000);
-  }
+  moduleConfig.connectWifiNetwork(loadConfig());
+  moduleConfig.blockingFeedback(LED_PIN, 100, 8);
   log(F("Connected to wifi network. Local IP"), WiFi.localIP());
   log(F("Configuring MQTT broker"));
   String port = String(mqttPort.getValue());
@@ -205,12 +192,12 @@ bool loadConfig() {
           JsonObject& json = jsonBuffer.parseObject(buf);
           json.printTo(Serial);
           if (json.success()) {
-            mqttServer.update(json[mqttServer.getID()]);
-            mqttPort.update(json[mqttPort.getID()]);
-            moduleName.update(json[moduleName.getID()]);
-            moduleLocation.update(json[moduleLocation.getID()]);
+            mqttServer.updateValue(json[mqttServer.getName()]);
+            mqttPort.updateValue(json[mqttPort.getName()]);
+            moduleName.updateValue(json[moduleName.getName()]);
+            moduleLocation.updateValue(json[moduleLocation.getName()]);
             for (uint8_t i = 0; i < CHANNELS_COUNT; ++i) {
-              channels[i].param->update(json[channels[i].param->getID()]);
+              channels[i].param->updateValue(json[channels[i].param->getName()]);
             }
             return true;
           } else {
@@ -221,24 +208,24 @@ bool loadConfig() {
           while (configFile.position() < size) {
             String line = configFile.readStringUntil('\n');
             line.trim();
-            uint16_t ioc = line.indexOf('=');
+            unsigned int ioc = line.indexOf('=');
             if (ioc >= 0 && ioc + 1 < line.length()) {
               String key = line.substring(0, ioc++);
               log("Read key", key);
               String val = line.substring(ioc, line.length());
               log("Key value", val);
-              if (key.equals(mqttPort.getID())) {
-                mqttPort.update(val.c_str());
-              } else if (key.equals(mqttServer.getID())) {
-                mqttServer.update(val.c_str());
-              } else if (key.equals(moduleLocation.getID())) {
-                moduleLocation.update(val.c_str());
-              } else if (key.equals(moduleName.getID())) {
-                moduleName.update(val.c_str());
+              if (key.equals(mqttPort.getName())) {
+                mqttPort.updateValue(val.c_str());
+              } else if (key.equals(mqttServer.getName())) {
+                mqttServer.updateValue(val.c_str());
+              } else if (key.equals(moduleLocation.getName())) {
+                moduleLocation.updateValue(val.c_str());
+              } else if (key.equals(moduleName.getName())) {
+                moduleName.updateValue(val.c_str());
               } else {
                 for (uint8_t i = 0; i < CHANNELS_COUNT; ++i) {
-                  if (key.equals(channels[i].param->getID())) {
-                    channels[i].param->update(val.c_str());
+                  if (key.equals(channels[i].param->getName())) {
+                    channels[i].param->updateValue(val.c_str());
                   }
                 }
               }
@@ -272,25 +259,25 @@ void saveConfigCallback () {
     DynamicJsonBuffer jsonBuffer;
     JsonObject& json = jsonBuffer.createObject();
     //TODO Trim param values
-    json[mqttServer.getID()] = mqttServer.getValue();
-    json[mqttPort.getID()] = mqttPort.getValue();
-    json[moduleName.getID()] = moduleName.getValue();
-    json[moduleLocation.getID()] = moduleLocation.getValue();
+    json[mqttServer.getName()] = mqttServer.getValue();
+    json[mqttPort.getName()] = mqttPort.getValue();
+    json[moduleName.getName()] = moduleName.getValue();
+    json[moduleLocation.getName()] = moduleLocation.getValue();
     for (uint8_t i = 0; i < CHANNELS_COUNT; ++i) {
-      json[channels[i].param->getID()] = channels[i].param->getValue();
+      json[channels[i].param->getName()] = channels[i].param->getValue();
     }
     json.printTo(configFile);
   #else
-    String line = String(mqttServer.getID()) + "=" + String(mqttServer.getValue());
+    String line = String(mqttServer.getName()) + "=" + String(mqttServer.getValue());
     configFile.println(line);
-    line = String(mqttPort.getID()) + "=" + String(mqttPort.getValue());
+    line = String(mqttPort.getName()) + "=" + String(mqttPort.getValue());
     configFile.println(line);
-    line = String(moduleName.getID()) + "=" + String(moduleName.getValue());
+    line = String(moduleName.getName()) + "=" + String(moduleName.getValue());
     configFile.println(line);
-    line = String(moduleLocation.getID()) + "=" + String(moduleLocation.getValue());
+    line = String(moduleLocation.getName()) + "=" + String(moduleLocation.getValue());
     configFile.println(line);
     for (uint8_t i = 0; i < CHANNELS_COUNT; ++i) {
-      line = String(channels[i].param->getID()) + "=" + String(channels[i].param->getValue());
+      line = String(channels[i].param->getName()) + "=" + String(channels[i].param->getValue());
       configFile.println(line);
     }
   #endif
@@ -312,14 +299,13 @@ void receiveMqttMessage(char* topic, unsigned char* payload, unsigned int length
 void hardReset () {
   log(F("Doing a module hard reset"));
   SPIFFS.format();
-  WiFiManager wifiManager;
-  wifiManager.resetSettings();
+  WiFi.disconnect();
   delay(200);
   ESP.restart();
 }
 
 void publishState (Channel *c) {
-  mqttClient.publish(getChannelTopic(c, "state").c_str(), new char[2]{c->sensorState, '\0'});
+  mqttClient.publish(getChannelTopic(c, "state").c_str(), String(c->sensorState).c_str());
 }
 
 void processPhysicalInput() {
@@ -345,13 +331,17 @@ bool isChannelEnabled (Channel *c) {
 }
 
 char* getStationName () {
-  int size = MODULE_TYPE.length() + moduleLocation.getValueLength() + moduleName.getValueLength() + 4;
-  String type(MODULE_TYPE);
-  String location(moduleLocation.getValue()); 
-  String name(moduleName.getValue());
-  char sn[size+1];
-  (type + "_" + location + "_" + name).toCharArray(sn, size+1);
-  return sn;
+  if (strlen(_stationName) <= 0) {
+    size_t size = MODULE_TYPE.length() + moduleLocation.getValueLength() + moduleName.getValueLength() + 4;
+    String sn;
+    sn.concat(MODULE_TYPE);
+    sn.concat("_");
+    sn.concat(moduleLocation.getValue()); 
+    sn.concat("_");
+    sn.concat(moduleName.getValue());
+    sn.toCharArray(_stationName, size);
+  } 
+  return _stationName;
 }
 
 void connectBroker() {
