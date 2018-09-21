@@ -25,11 +25,9 @@ const char STATE_OFF      = '0';
 const char STATE_ON       = '1';
 
 #ifndef ESP01
-const String MODULE_TYPE  = "senseStation";
-const String CHANNEL_TYPE = "sensor";
+const String MODULE_TYPE = "sensor";
 #else
-const String CHANNEL_TYPE = "sensor";
-const String MODULE_TYPE  = CHANNEL_TYPE;
+const String MODULE_TYPE = "sensor";
 #endif
 
 struct Channel {
@@ -108,7 +106,7 @@ void setup() {
 #endif
   delay(500);
   Serial.println();
-  log("Starting module");
+  log(F("Starting module"));
   bool existConfig = loadConfig();
     
   // pins settings
@@ -160,6 +158,24 @@ void setup() {
   Serial.print(F("HTTPUpdateServer ready! Open http://"));
   Serial.print(WiFi.localIP().toString());
   Serial.println(F("/update in your browser"));
+  
+  httpServer.on("/config", showConfig);
+}
+
+void showConfig () {
+  String configPage = F("<div><h2>Channels config</h2>");
+  for (uint8_t  i = 0; i < CHANNELS_COUNT; ++i) {
+    configPage.concat(getChannelConfigHtml(&channels[i]));
+  }
+  configPage.concat(F("</div>"));
+  httpServer.send(200, "text/html", configPage);
+}
+
+String getChannelConfigHtml(Channel *c) {
+  String html = F("<div>");
+  html.concat(c->param->getValue());
+  html.concat("</div>");
+  return html;
 }
 
 void loop() {
@@ -344,20 +360,15 @@ void connectBroker() {
     log(F("Connecting MQTT broker as"), getStationName());
     if (mqttClient.connect(getStationName())) {
       log(F("MQTT broker connected"));
-      subscribeTopic(getStationTopic("#").c_str());
+      mqttClient.subscribe(getStationTopic("#").c_str());
     }
   } else {
     log(F("Failed. RC:"), mqttClient.state());
   }
 }
 
-void subscribeTopic(const char *t) {
-  log("Subscribing mqtt topic", t);
-  mqttClient.subscribe(t);
-}
-
 String getChannelTopic (Channel *c, String cmd) {
-  return CHANNEL_TYPE + F("/") + moduleLocation.getValue() + F("/") + c->param->getValue() + F("/") + cmd;
+  return MODULE_TYPE + F("/") + moduleLocation.getValue() + F("/") + c->param->getValue() + F("/") + cmd;
 }
 
 String getStationTopic (String cmd) {
