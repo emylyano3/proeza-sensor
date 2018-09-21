@@ -118,7 +118,7 @@ void setup() {
   moduleConfig.addParameter(&mqttPort);
   moduleConfig.addParameter(&moduleLocation);
   moduleConfig.addParameter(&moduleName);
-  moduleConfig.setPortalSSID("ESP-Irrigation");
+  moduleConfig.setPortalSSID("ESP-Sensor");
   moduleConfig.setFeedbackPin(LED_PIN);
   moduleConfig.setAPStaticIP(IPAddress(10,10,10,10),IPAddress(IPAddress(10,10,10,10)),IPAddress(IPAddress(255,255,255,0)));
   for (uint8_t i = 0; i < CHANNELS_COUNT; ++i) {
