@@ -1,8 +1,8 @@
 #include <ESPDomotic.h>
 
 #ifdef ESP01
-Channel _channelA ("A", "Light", 2, INPUT, LOW);
-Channel _channelB ("B", "Switch", 3, INPUT, LOW);
+Channel _channelA ("A", "sensor_a", 2, INPUT, LOW);
+Channel _channelB ("B", "sensor_b", 3, INPUT, LOW);
 
 const uint8_t TX_PIN          = 1;
 const uint8_t LED_PIN         = -1;
@@ -26,14 +26,14 @@ const uint8_t CHANNELS_COUNT  = 3;
 
 template <class T> void log (T text) {
   if (LOGGING) {
-    Serial.print("*SW: ");
+    Serial.print("*SS: ");
     Serial.println(text);
   }
 }
 
 template <class T, class U> void log (T key, U value) {
   if (LOGGING) {
-    Serial.print("*SW: ");
+    Serial.print("*SS: ");
     Serial.print(key);
     Serial.print(": ");
     Serial.println(value);
@@ -83,7 +83,6 @@ String getChannelConfigHtml(Channel *c) {
 }
 
 void loop() {
-  _domoticModule.getHttpServer()->handleClient();
   processPhysicalInput();
   _domoticModule.loop();
   delay(READ_INTERVAL);
